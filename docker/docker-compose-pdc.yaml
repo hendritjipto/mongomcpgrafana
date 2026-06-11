@@ -1,0 +1,167 @@
+# MongoDB + Grafana Cloud observability stack with three sample apps.
+#
+# Builds and runs three applications (Node.js, Go, Java Spring Boot) that each
+# connect to MongoDB and export OpenTelemetry (traces/metrics/logs) to Alloy,
+# which forwards to Grafana Cloud. A PDC agent and MongoDB MCP server are included
+# to match sample/docker-compose-pdc.yaml.
+#
+# Copy .env.example to .env and fill in the Grafana Cloud values before running:
+#   docker compose -f docker-compose-pdc.yaml up --build
+
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:7.0
+    container_name: pdc-mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:-changeme}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-changeme}
+      MONGO_INITDB_DATABASE: ${MONGO_DATABASE:-grafana_pdc}
+    ports:
+      - "${MONGO_PORT:-27017}:27017"
+    volumes:
+      - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
+    networks:
+      - pdc-network
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  # Grafana Alloy - receives OTLP from the apps and forwards to Grafana Cloud.
+  alloy:
+    image: grafana/alloy:v1.11.0
+    container_name: pdc-alloy
+    restart: unless-stopped
+    ports:
+      - "12345:12345" # Alloy UI
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+    environment:
+      GCLOUD_OTLP_ENDPOINT: ${GCLOUD_OTLP_ENDPOINT}
+      GCLOUD_OTLP_USERNAME: ${GCLOUD_OTLP_USERNAME}
+      GCLOUD_RW_API_KEY: ${GCLOUD_RW_API_KEY}
+    volumes:
+      - ./alloy/config.alloy:/etc/alloy/config.alloy
+    command: run --server.http.listen-addr=0.0.0.0:12345 --storage.path=/var/lib/alloy/data /etc/alloy/config.alloy --stability.level experimental
+    networks:
+      - pdc-network
+
+  # Grafana PDC Agent - outbound SSH tunnel so Grafana Cloud can reach mongodb.
+  # Required: GCLOUD_PDC_SIGNING_TOKEN, GCLOUD_HOSTED_GRAFANA_ID, GCLOUD_PDC_CLUSTER
+  grafana-pdc-agent:
+    image: grafana/pdc-agent:latest
+    container_name: grafana-pdc-agent
+    restart: unless-stopped
+    environment:
+      GCLOUD_PDC_SIGNING_TOKEN: ${GCLOUD_PDC_SIGNING_TOKEN}
+      GCLOUD_HOSTED_GRAFANA_ID: ${GCLOUD_HOSTED_GRAFANA_ID}
+      GCLOUD_PDC_CLUSTER: ${GCLOUD_PDC_CLUSTER}
+    command:
+      - -token
+      - ${GCLOUD_PDC_SIGNING_TOKEN}
+      - -cluster
+      - ${GCLOUD_PDC_CLUSTER}
+      - -gcloud-hosted-grafana-id
+      - ${GCLOUD_HOSTED_GRAFANA_ID}
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - pdc-network
+
+  # MongoDB MCP Server - Model Context Protocol server for MongoDB over HTTP.
+  mongodb-mcp-server:
+    image: mongodb/mongodb-mcp-server:latest
+    container_name: mongodb-mcp-server
+    restart: unless-stopped
+    environment:
+      MDB_MCP_CONNECTION_STRING: ${MDB_MCP_CONNECTION_STRING:-mongodb://${MONGO_ROOT_USERNAME:-admin}:${MONGO_ROOT_PASSWORD:-changeme}@mongodb:27017/${MONGO_DATABASE:-grafana_pdc}?authSource=admin}
+      MDB_MCP_EXTERNALLY_MANAGED_SESSIONS: ${MDB_MCP_EXTERNALLY_MANAGED_SESSIONS:-true}
+      MDB_MCP_LOGGERS: "stderr"
+      MDB_MCP_LOG_LEVEL: ${MDB_MCP_LOG_LEVEL:-info}
+    command:
+      - --transport
+      - http
+      - --httpHost
+      - "0.0.0.0"
+    ports:
+      - "${MDB_MCP_PORT:-3000}:3000"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - pdc-network
+
+  # ---- Sample applications: each connects to MongoDB and emits OTel telemetry ----
+
+  node-app:
+    build:
+      context: ./node-app
+    container_name: pdc-node-app
+    restart: unless-stopped
+    environment:
+      MONGODB_URI: mongodb://${MONGO_ROOT_USERNAME:-admin}:${MONGO_ROOT_PASSWORD:-changeme}@mongodb:27017/${MONGO_DATABASE:-grafana_pdc}?authSource=admin
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://alloy:4318
+      OTEL_SERVICE_NAME: node-app
+      OTEL_RESOURCE_ATTRIBUTES: service.name=node-app,service.namespace=grafana.com,deployment.environment=production
+      PORT: "8080"
+    ports:
+      - "${NODE_APP_PORT:-8080}:8080"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - pdc-network
+
+  go-app:
+    build:
+      context: ./go-app
+    container_name: pdc-go-app
+    restart: unless-stopped
+    environment:
+      MONGODB_URI: mongodb://${MONGO_ROOT_USERNAME:-admin}:${MONGO_ROOT_PASSWORD:-changeme}@mongodb:27017/${MONGO_DATABASE:-grafana_pdc}?authSource=admin
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://alloy:4318
+      OTEL_SERVICE_NAME: go-app
+      OTEL_RESOURCE_ATTRIBUTES: service.name=goland-app,service.namespace=grafana.com,deployment.environment=production
+    ports:
+      - "${GO_APP_PORT:-8081}:8080"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - pdc-network
+
+  springboot-app:
+    build:
+      context: ./springboot-app
+    container_name: pdc-springboot-app
+    restart: unless-stopped
+    environment:
+      MONGODB_URI: mongodb://${MONGO_ROOT_USERNAME:-admin}:${MONGO_ROOT_PASSWORD:-changeme}@mongodb:27017/${MONGO_DATABASE:-grafana_pdc}?authSource=admin
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://alloy:4318
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      OTEL_RESOURCE_ATTRIBUTES: service.name=springboot-app,service.namespace=grafana.com,deployment.environment=production
+    ports:
+      - "${SPRINGBOOT_APP_PORT:-8082}:8080"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - pdc-network
+
+networks:
+  pdc-network:
+    driver: bridge
+    name: pdc-network
+
+volumes:
+  mongodb_data:
+    driver: local
+  mongodb_config:
+    driver: local

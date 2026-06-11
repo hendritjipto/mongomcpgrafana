@@ -1,0 +1,25 @@
+{
+  "name": "node-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Sample Node.js app: connects to MongoDB and emits OpenTelemetry to Alloy",
+  "scripts": {
+    "start": "node --import ./instrumentation.js index.js"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/auto-instrumentations-node": "^0.52.0",
+    "@opentelemetry/exporter-logs-otlp-http": "^0.55.0",
+    "@opentelemetry/exporter-metrics-otlp-http": "^0.55.0",
+    "@opentelemetry/host-metrics": "^0.35.0",
+    "@opentelemetry/instrumentation-mongodb": "^0.50.0",
+    "@opentelemetry/instrumentation-runtime-node": "^0.11.0",
+    "@opentelemetry/sdk-logs": "^0.55.0",
+    "@opentelemetry/sdk-metrics": "^1.28.0",
+    "@opentelemetry/sdk-node": "^0.55.0",
+    "bson": "^6.8.0",
+    "express": "^4.21.0",
+    "mongodb": "^6.10.0"
+  }
+}

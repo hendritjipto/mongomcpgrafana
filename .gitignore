@@ -35,6 +35,8 @@ docker-compose.override.yml
 *.dylib
 bin/
 dist/
+# Compiled go-app binary (produced by `go build` in the package dir)
+docker/go-app/go-app
 # Test binary and coverage
 *.test
 *.out
